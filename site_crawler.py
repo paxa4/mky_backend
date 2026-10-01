@@ -141,6 +141,8 @@ def crawl(
     queue  = [base]
     seen:   set[str]          = set()
     result: dict[str, dict]   = {}
+    first_error: Exception | None = None
+    error_count = 0
 
     logger.info(f"[crawl] Старт: {start_url}  (лимит: {max_pages or '∞'} стр.)")
 
@@ -155,7 +157,25 @@ def crawl(
         try:
             resp = session.get(url, timeout=10, allow_redirects=True)
         except requests.RequestException as e:
-            logger.debug(f"[crawl] Сетевая ошибка {url}: {e}")
+            error_count += 1
+            if first_error is None:
+                first_error = e
+            # Сетевые ошибки на отдельных страницах (например, временный
+            # таймаут) — это нормально, поэтому по умолчанию они тихие.
+            # Но если ошибка повторяется систематически (SSL/сеть не
+            # работают вообще), это стоит показать сразу, а не только
+            # в итоговой сводке ниже — иначе краулер будет молча
+            # перебирать всю очередь, принимая одну и ту же ошибку за
+            # каждую отдельную страницу.
+            if isinstance(e, requests.exceptions.SSLError):
+                logger.warning(
+                    f"[crawl] Ошибка SSL-сертификата при обращении к {url}: {e}. "
+                    "Похоже, сеть/прокси подменяет сертификат сайта — "
+                    "проверьте настройки антивируса (проверка защищённых "
+                    "соединений) или сетевой фильтр."
+                )
+            else:
+                logger.debug(f"[crawl] Сетевая ошибка {url}: {e}")
             continue
 
         if resp.status_code != 200:
@@ -192,5 +212,13 @@ def crawl(
 
         time.sleep(delay)
 
-    logger.info(f"[crawl] Готово: {len(result)} страниц")
+    if not result and error_count:
+        logger.warning(
+            f"[crawl] Готово: 0 страниц из {error_count} попыток — ни одна "
+            f"страница не загрузилась. Последняя ошибка: {first_error}. "
+            "Это обычно сеть/прокси/сертификат на стороне сервера, где "
+            "запущен backend, а не проблема в самом сайте."
+        )
+    else:
+        logger.info(f"[crawl] Готово: {len(result)} страниц")
     return result

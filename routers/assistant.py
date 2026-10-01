@@ -542,6 +542,44 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
+def _check_chroma_not_lfs_pointer(persist_dir: str) -> None:
+    """Понятная ошибка вместо "file is not a database" от chromadb.
+
+    Если репозиторий склонировали без Git LFS (или скачали ZIP-архивом с
+    GitHub), файл chroma.sqlite3 физически существует, но вместо самой
+    базы в нём лежит крошечный текстовый указатель Git LFS вида:
+        version https://git-lfs.github.com/spec/v1
+        oid sha256:...
+    SQLite пытается открыть его как базу данных и падает с нечитаемой
+    ошибкой "file is not a database", по которой невозможно догадаться
+    о реальной причине. Эта проверка ловит именно такой случай заранее.
+    """
+    import os
+
+    sqlite_path = os.path.join(persist_dir, "chroma.sqlite3")
+    if not os.path.exists(sqlite_path):
+        return
+
+    try:
+        with open(sqlite_path, "rb") as f:
+            head = f.read(64)
+    except OSError:
+        return
+
+    if head.startswith(b"version https://git-lfs.github.com/spec/v1"):
+        raise RuntimeError(
+            f"Файл {sqlite_path} — это указатель Git LFS, а не настоящая "
+            "база данных Chroma. Такое бывает, если репозиторий скачан "
+            "кнопкой «Download ZIP» на GitHub или склонирован без "
+            "установленного Git LFS. Исправление: установите git-lfs "
+            "(https://git-lfs.com), затем в папке репозитория выполните "
+            "`git lfs install` и `git lfs pull`. Либо, если векторная "
+            "база не нужна (достаточно переиндексации с нуля), удалите "
+            f"папку {persist_dir} целиком — она будет создана заново "
+            "командой «Полная переиндексация» в админке ассистента."
+        )
+
+
 def get_vectorstore() -> Any:
     """Возвращает единый Chroma-объект, создаёт при первом вызове."""
     global _vectorstore
@@ -550,6 +588,8 @@ def get_vectorstore() -> Any:
             if _vectorstore is None:
                 from langchain_chroma import Chroma
                 from assistant_access import ensure_access_level_metadata
+
+                _check_chroma_not_lfs_pointer(cfg.persist_dir)
 
                 _vectorstore = Chroma(
                     collection_name=cfg.collection_name,

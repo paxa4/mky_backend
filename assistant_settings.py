@@ -10,7 +10,33 @@ from sqlalchemy.orm import Session
 
 from models import AssistantRuntimeSettings
 
-AVAILABLE_GIGACHAT_MODELS = ("GigaChat", "GigaChat-Pro", "GigaChat-Max")
+GIGACHAT_DEFAULT_MODEL = "GigaChat-2"
+
+# Актуальный список моделей GigaChat на дату правки (сентябрь 2026).
+# Sber периодически переименовывает/добавляет линейки моделей (так уже
+# было: GigaChat -> GigaChat-2 -> GigaChat-3), и старое имя из этого
+# списка может однажды снова стать недействительным и вызвать ошибку
+# "No such model" на новых ключах. Если это случится — узнать текущий
+# актуальный список можно так (ключ брать из переменной окружения,
+# ничего никуда не публиковать):
+#     docker exec <контейнер backend> python -c \
+#         "import os; from gigachat import GigaChat; \
+#          g = GigaChat(credentials=os.environ['GIGACHAT_CREDENTIALS'], \
+#              scope=os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS')); \
+#          print([m.id_ for m in g.get_models().data])"
+AVAILABLE_GIGACHAT_MODELS = (
+    "GigaChat-2",
+    "GigaChat-2-Pro",
+    "GigaChat-2-Max",
+    "GigaChat-3-Lightning",
+    "GigaChat-3-Pro",
+    "GigaChat-3-Ultra",
+    # Старые имена линейки GigaChat 1 оставлены для обратной совместимости
+    # с уже сохранёнными в БД настройками старых установок.
+    "GigaChat",
+    "GigaChat-Pro",
+    "GigaChat-Max",
+)
 SettingsListener = Callable[["AssistantSettings", "AssistantSettings"], None]
 
 
@@ -29,8 +55,8 @@ def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
 
 
 def _env_model() -> str:
-    value = os.getenv("GIGACHAT_MODEL", "GigaChat").strip()
-    return value if value in AVAILABLE_GIGACHAT_MODELS else "GigaChat"
+    value = os.getenv("GIGACHAT_MODEL", GIGACHAT_DEFAULT_MODEL).strip()
+    return value if value in AVAILABLE_GIGACHAT_MODELS else GIGACHAT_DEFAULT_MODEL
 
 
 @dataclass(frozen=True)
