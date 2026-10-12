@@ -31,7 +31,7 @@ from auth import (
     get_current_user, get_user_from_refresh_token,
     ACCESS_TOKEN_EXPIRE_MINUTES, REFRESH_TOKEN_EXPIRE_DAYS,
 )
-from schemas import RefreshTokenRequest, UserCreate, UserResponse, Token
+from schemas import RefreshTokenRequest, UserCreate, UserProfileUpdate, UserResponse, Token
 from api import tpmpk_router
 from dom_uchitelya import router as dom_uchitelya_router
 
@@ -654,6 +654,22 @@ def get_me(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    return _user_response(db, current_user)
+
+
+@app.put("/auth/me", response_model=UserResponse)
+def update_me(
+    user_data: UserProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    payload = user_data.model_dump(exclude_unset=True)
+    for field in ("last_name", "first_name", "middle_name"):
+        if field in payload:
+            value = payload[field]
+            setattr(current_user, field, value.strip() if isinstance(value, str) else value)
+    db.commit()
+    db.refresh(current_user)
     return _user_response(db, current_user)
 
 

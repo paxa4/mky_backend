@@ -14,6 +14,12 @@ class UserCreate(BaseModel):
     password: str
 
 
+class UserProfileUpdate(BaseModel):
+    last_name: Optional[str] = Field(None, max_length=100)
+    first_name: Optional[str] = Field(None, max_length=100)
+    middle_name: Optional[str] = Field(None, max_length=100)
+
+
 class UserAdminCreate(BaseModel):
     email: EmailStr
     last_name: Optional[str] = Field(None, max_length=100)
