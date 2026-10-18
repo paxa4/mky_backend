@@ -13,11 +13,15 @@ router = APIRouter(prefix="/audit-log", tags=["audit"])
 def list_audit_log(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    entity_type: list[str] | None = Query(None),
     _: object = Depends(require_permission("audit_log", "view")),
     db: Session = Depends(get_db),
 ):
+    query = db.query(AuditLog)
+    if entity_type:
+        query = query.filter(AuditLog.entity_type.in_(entity_type))
     return (
-        db.query(AuditLog)
+        query
         .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
         .offset(offset)
         .limit(limit)

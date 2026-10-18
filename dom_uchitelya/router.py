@@ -35,6 +35,49 @@ PLACEMENT_FIELDS = {
     "hub_kind",
     "hub_path",
 }
+PUBLIC_SECTION_KEY_PREFIX = "page:"
+LEGACY_PUBLIC_SECTION_PATHS = {
+    "methodika_section:metodicheskiy-sovet": "/metodicheskoe-prostranstvo/metodicheskie-materialy/",
+    "methodika_section:rekomendacii": "/metodicheskoe-prostranstvo/metodicheskie-materialy/",
+}
+PROFILE_SECTION_KEY_PREFIXES = (
+    PUBLIC_SECTION_KEY_PREFIX,
+    "methodika_subject:",
+    "methodika_section:",
+    "noko:",
+    "konkursy:",
+    "deyatelnost:",
+    "archiv:",
+)
+
+
+def _normalize_public_section_path(value: str | None) -> str:
+    path = str(value or "").strip().split("#", 1)[0].split("?", 1)[0]
+    if not path:
+        return "/"
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return path if path.endswith("/") else f"{path}/"
+
+
+def _public_section_path_from_key(key: str | None) -> str | None:
+    if str(key or "") in LEGACY_PUBLIC_SECTION_PATHS:
+        return LEGACY_PUBLIC_SECTION_PATHS[str(key)]
+    raw_key = str(key or "")
+    for prefix, root in (
+        ("domu:", "dom-uchitelya"),
+        ("noko:", "noko"),
+        ("konkursy:", "konkursy"),
+        ("deyatelnost:", "deyatelnost"),
+        ("archiv:", "archiv"),
+    ):
+        if raw_key.startswith(prefix):
+            value = raw_key[len(prefix):]
+            if value and value != "root":
+                return _normalize_public_section_path(f"/{root}/{value}/")
+    if not str(key or "").startswith(PUBLIC_SECTION_KEY_PREFIX):
+        return None
+    return _normalize_public_section_path(str(key)[len(PUBLIC_SECTION_KEY_PREFIX):])
 
 
 def _user_role_name(user) -> str:
@@ -154,7 +197,10 @@ def _sections_from_payload(sections: list | None, keys: list[str]) -> list[dict]
 
 
 def _primary_section_key(keys: list[str]) -> str:
-    return next((key for key in keys if key not in {"home", "events"}), None) or ("home" if "home" in keys else (keys[0] if keys else "home"))
+    return next(
+        (key for key in keys if key not in {"home", "events"} and not str(key).endswith(":root")),
+        None,
+    ) or ("home" if "home" in keys else (keys[0] if keys else "home"))
 
 
 def _legacy_fields_from_section_keys(keys: list[str]) -> dict:
@@ -168,6 +214,11 @@ def _legacy_fields_from_section_keys(keys: list[str]) -> dict:
         "hub_kind": None,
         "hub_path": None,
     }
+    for key in keys:
+        if key.startswith("domu:") and key != "domu:root" and payload["dom_uchitelya_section"] is None:
+            payload["dom_uchitelya_section"] = key.replace("domu:", "", 1)
+        if key.startswith("noko:") and key != "noko:root" and payload["noko_section"] is None:
+            payload["noko_section"] = key.replace("noko:", "", 1)
     if primary.startswith("domu:") and primary != "domu:root":
         payload["dom_uchitelya_section"] = primary.replace("domu:", "", 1)
     elif primary.startswith("methodika_subject:"):
@@ -304,6 +355,28 @@ def _article_matches_hub(article: Article, hub: str, section: str | None, subjec
     return any(key.startswith(f"{hub}:") for key in keys)
 
 
+def _article_matches_public_section(article: Article, path: str) -> bool:
+    target = _normalize_public_section_path(path)
+    return any(_public_section_path_from_key(key) == target for key in _article_section_keys(article))
+
+
+def _article_scope_matches(article: Article, scopes: tuple[str, ...]) -> bool:
+    stored_scope = str(article.publishing_scope or "imcro_only")
+    if stored_scope in scopes:
+        return True
+    if "both" not in scopes:
+        return False
+    keys = _article_section_keys(article)
+    has_domu = any(key.startswith("domu:") for key in keys)
+    has_non_domu = any(not key.startswith("domu:") for key in keys)
+    return has_domu and has_non_domu
+
+
+def _is_profile_article(article: Article) -> bool:
+    keys = _article_section_keys(article)
+    return any(key.startswith(PROFILE_SECTION_KEY_PREFIXES) for key in keys)
+
+
 def _slice_filtered_articles(items: list[Article], limit: int, offset: int) -> list[Article]:
     return items[offset:offset + limit]
 
@@ -372,13 +445,18 @@ def _query_public_news(db: Session, scopes: tuple[str, str], limit: int, offset:
         db.query(Article)
         .filter(
             Article.status == "published",
-            Article.publishing_scope.in_(scopes),
             ((Article.published_at == None) | (Article.published_at <= now)),  # noqa: E711
         )
         .order_by(Article.is_pinned.desc(), Article.published_at.desc(), Article.created_at.desc(), Article.id.desc())
         .all()
     )
-    return {"items": _slice_filtered_articles([article for article in items if _article_matches_feed(article, root)], limit, offset)}
+    return {
+        "items": _slice_filtered_articles(
+            [article for article in items if _article_scope_matches(article, scopes) and _article_matches_feed(article, root)],
+            limit,
+            offset,
+        )
+    }
 
 
 def _query_public_events(db: Session, scopes: tuple[str, str], limit: int, offset: int):
@@ -387,13 +465,18 @@ def _query_public_events(db: Session, scopes: tuple[str, str], limit: int, offse
         db.query(Article)
         .filter(
             Article.status == "published",
-            Article.publishing_scope.in_(scopes),
             ((Article.published_at == None) | (Article.published_at <= now)),  # noqa: E711
         )
         .order_by(Article.is_pinned.desc(), Article.published_at.desc(), Article.created_at.desc(), Article.id.desc())
         .all()
     )
-    return {"items": _slice_filtered_articles([article for article in items if _article_matches_events(article)], limit, offset)}
+    return {
+        "items": _slice_filtered_articles(
+            [article for article in items if _article_scope_matches(article, scopes) and _article_matches_events(article)],
+            limit,
+            offset,
+        )
+    }
 
 
 def _query_public_hub_news(
@@ -408,14 +491,44 @@ def _query_public_hub_news(
     now = datetime.now(timezone.utc)
     query = db.query(Article).filter(
         Article.status == "published",
-        Article.publishing_scope.in_(scopes),
         ((Article.published_at == None) | (Article.published_at <= now)),  # noqa: E711
     )
     items = (
         query.order_by(Article.is_pinned.desc(), Article.published_at.desc(), Article.created_at.desc(), Article.id.desc())
         .all()
     )
-    return {"items": _slice_filtered_articles([article for article in items if _article_matches_hub(article, hub, section, subject)], limit, offset)}
+    return {
+        "items": _slice_filtered_articles(
+            [article for article in items if _article_scope_matches(article, scopes) and _article_matches_hub(article, hub, section, subject)],
+            limit,
+            offset,
+        )
+    }
+
+
+def _query_public_profile_news(db: Session, scopes: tuple[str, str], limit: int, offset: int, path: str | None = None):
+    now = datetime.now(timezone.utc)
+    items = (
+        db.query(Article)
+        .filter(
+            Article.status == "published",
+            ((Article.published_at == None) | (Article.published_at <= now)),  # noqa: E711
+        )
+        .order_by(Article.is_pinned.desc(), Article.published_at.desc(), Article.created_at.desc(), Article.id.desc())
+        .all()
+    )
+    matches = (
+        (lambda article: _article_matches_public_section(article, path))
+        if path
+        else _is_profile_article
+    )
+    return {
+        "items": _slice_filtered_articles(
+            [article for article in items if _article_scope_matches(article, scopes) and matches(article)],
+            limit,
+            offset,
+        )
+    }
 
 
 def _query_admin_news(db: Session, scopes: tuple[str, ...] | None = None, role_name: str | None = None, user=None):
@@ -590,6 +703,17 @@ def get_hub_news(
     db: Session = Depends(get_db),
 ):
     return _query_public_hub_news(db, COMMON_PUBLIC_SCOPES, hub, section, subject, limit, offset)
+
+
+@router.get("/api/profile/news/", response_model=ArticleListResponse)
+def get_profile_news(
+    limit: int = Query(100, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    path: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Return published materials assigned to public profile sections."""
+    return _query_public_profile_news(db, COMMON_PUBLIC_SCOPES, limit, offset, path)
 
 
 @router.get("/api/admin/articles/", response_model=ArticleListResponse)

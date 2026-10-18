@@ -113,6 +113,24 @@ def test_public_news_scope_filters(client):
     assert [item["title"] for item in domu.json()["items"]] == ["Both feeds", "DOMU only"]
 
 
+def test_public_domu_news_keeps_legacy_mixed_section_article_visible(client):
+    _add_article_obj(
+        client,
+        title="Legacy mixed article",
+        slug="legacy-mixed-article",
+        publishing_scope="imcro_only",
+        sections=[
+            {"key": "domu:master-klassy", "label": "Мастер-классы"},
+            {"key": "noko:gia-11", "label": "ГИА-11"},
+        ],
+    )
+
+    response = client.get("/api/dom-uchitelya/news/")
+
+    assert response.status_code == 200
+    assert [item["title"] for item in response.json()["items"]] == ["Legacy mixed article"]
+
+
 def test_public_news_sorts_pinned_then_newest_and_hides_scheduled(client):
     now = datetime.now(timezone.utc)
     _add_article_obj(

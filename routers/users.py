@@ -48,6 +48,42 @@ def _ensure_unique_user_identity(
                 detail="Пользователь с таким email уже существует",
             )
 
+
+AUDIT_USER_FIELDS = (
+    "email",
+    "last_name",
+    "first_name",
+    "middle_name",
+    "role",
+    "is_active",
+    "allowed_methodika_subjects",
+)
+
+
+def _user_role_name(db: Session, user: User) -> str:
+    role = db.query(UserRole).filter(UserRole.id == user.role_id).first() if user.role_id else None
+    return role.role_name if role else "user"
+
+
+def _user_audit_snapshot(db: Session, user: User) -> dict:
+    return {
+        "email": user.email,
+        "last_name": user.last_name,
+        "first_name": user.first_name,
+        "middle_name": user.middle_name,
+        "role": _user_role_name(db, user),
+        "is_active": bool(user.is_active),
+        "allowed_methodika_subjects": list(user.allowed_methodika_subjects or []),
+    }
+
+
+def _audit_changes(before: dict | None, after: dict) -> list[dict]:
+    return [
+        {"field": field, "from": (before or {}).get(field), "to": after.get(field)}
+        for field in AUDIT_USER_FIELDS
+        if before is None or (before or {}).get(field) != after.get(field)
+    ]
+
 @router.get("/", response_model=List[UserResponse])
 def get_all_users(db: Session = Depends(get_db)):
     """Получить список всех пользователей."""
@@ -75,14 +111,26 @@ def update_role_permissions(
     if not role:
         raise HTTPException(status_code=404, detail="Роль не найдена")
 
-    role.permissions = normalize_role_permissions(permissions_data.permissions, role.role_name)
+    before_permissions = normalize_role_permissions(role.permissions, role.role_name)
+    after_permissions = normalize_role_permissions(permissions_data.permissions, role.role_name)
+    permission_changes = [
+        {"module": module_key, "from": before_permissions.get(module_key), "to": after_permissions.get(module_key)}
+        for module_key in sorted(set(before_permissions) | set(after_permissions))
+        if before_permissions.get(module_key) != after_permissions.get(module_key)
+    ]
+    role.permissions = after_permissions
     record_audit(
         db,
         current_user,
         action="Изменение прав роли",
         entity_type="role",
         entity_id=role.id,
-        details={"role": role.role_name, "permissions": role.permissions},
+        details={
+            "role": role.role_name,
+            "changes": permission_changes,
+            "before": before_permissions,
+            "after": after_permissions,
+        },
     )
     db.commit()
     db.refresh(role)
@@ -122,13 +170,14 @@ def create_user(
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+    after_snapshot = _user_audit_snapshot(db, new_user)
     record_audit(
         db,
         current_user,
         action="Создание пользователя",
         entity_type="user",
         entity_id=new_user.id,
-        details={"email": new_user.email, "role": role.role_name if role else "user"},
+        details={"changes": _audit_changes(None, after_snapshot), "after": after_snapshot},
     )
     db.commit()
     return new_user
@@ -146,6 +195,7 @@ def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
 
+    before_snapshot = _user_audit_snapshot(db, user)
     payload = user_data.model_dump(exclude_unset=True)
     email = payload.get("email")
     _ensure_unique_user_identity(
@@ -174,13 +224,14 @@ def update_user(
 
     db.commit()
     db.refresh(user)
+    after_snapshot = _user_audit_snapshot(db, user)
     record_audit(
         db,
         current_user,
         action="Изменение пользователя",
         entity_type="user",
         entity_id=user.id,
-        details={"fields": list(payload.keys())},
+        details={"changes": _audit_changes(before_snapshot, after_snapshot), "before": before_snapshot, "after": after_snapshot},
     )
     db.commit()
     return user
@@ -197,7 +248,7 @@ def delete_user(
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
 
-    deleted_email = user.email
+    before_snapshot = _user_audit_snapshot(db, user)
     db.delete(user)
     db.commit()
     record_audit(
@@ -206,7 +257,7 @@ def delete_user(
         action="Удаление пользователя",
         entity_type="user",
         entity_id=user_id,
-        details={"email": deleted_email},
+        details={"changes": _audit_changes(before_snapshot, {field: None for field in AUDIT_USER_FIELDS}), "before": before_snapshot},
     )
     db.commit()
     return None
