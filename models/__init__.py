@@ -64,6 +64,41 @@ class User(Base):
         return bool(getattr(self.role, "can_access_internal_docs", False))
 
 
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+    __table_args__ = (
+        Index("audit_log_created_idx", "created_at"),
+        Index("audit_log_user_idx", "user_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    user_name = Column(String(255), nullable=True)
+    user_email = Column(String(255), nullable=True)
+    action = Column(String(120), nullable=False)
+    entity_type = Column(String(80), nullable=False)
+    entity_id = Column(Integer, nullable=True)
+    details = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    user = relationship("User")
+
+
+class PortalSettings(Base):
+    __tablename__ = "portal_settings"
+
+    id = Column(Integer, primary_key=True)
+    portal_name = Column(String(200), nullable=False, default="МКУ ИМЦРО")
+    contact_email = Column(String(255), nullable=True)
+    contact_phone = Column(String(100), nullable=True)
+    contact_address = Column(String(500), nullable=True)
+    footer_text = Column(String(500), nullable=True)
+    updated_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    updated_by = relationship("User", foreign_keys=[updated_by_id])
+
+
 class AssistantChatSession(Base):
     __tablename__ = "assistant_chat_session"
     __table_args__ = (
@@ -340,6 +375,7 @@ class ArticleTag(Base):
 
 __all__ = [
     "Appointment",
+    "AuditLog",
     "Article",
     "ArticleCategory",
     "ArticleStatus",
@@ -350,6 +386,7 @@ __all__ = [
     "Category",
     "CertificateTemplate",
     "GeneratedCertificate",
+    "PortalSettings",
     "Tag",
     "TemplateSigner",
     "TemplateTextElement",

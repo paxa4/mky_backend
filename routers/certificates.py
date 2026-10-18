@@ -9,6 +9,7 @@ import re
 from datetime import datetime
 from urllib.parse import quote
 from database import get_db
+from audit import record_audit
 from models import (
     CertificateTemplate, TemplateTextElement, GeneratedCertificate,
     TemplateSigner, User
@@ -329,6 +330,8 @@ def create_template(
     db.add(template)
     db.commit()
     db.refresh(template)
+    record_audit(db, current_user, action="Создание шаблона грамоты", entity_type="certificate_template", entity_id=template.id, details={"name": template.name})
+    db.commit()
     return template
 
 
@@ -338,7 +341,11 @@ def get_templates(db: Session = Depends(get_db)):
 
 
 @router.delete("/templates/{template_id}")
-def delete_template(template_id: int, db: Session = Depends(get_db)):
+def delete_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_certificate_manager_user),
+):
     template = db.query(CertificateTemplate).filter_by(id=template_id).first()
     if not template:
         raise HTTPException(status_code=404, detail="Шаблон не найден")
@@ -350,9 +357,12 @@ def delete_template(template_id: int, db: Session = Depends(get_db)):
             detail="Нельзя удалить шаблон: по нему уже созданы сертификаты",
         )
 
+    deleted_name = template.name
     db.query(TemplateTextElement).filter_by(template_id=template_id).delete()
     db.query(TemplateSigner).filter_by(template_id=template_id).delete()
     db.delete(template)
+    db.commit()
+    record_audit(db, current_user, action="Удаление шаблона грамоты", entity_type="certificate_template", entity_id=template_id, details={"name": deleted_name})
     db.commit()
     return {"ok": True, "message": "Шаблон удалён"}
 
@@ -418,6 +428,9 @@ def create_template_full(
             db.refresh(el)
         for s in new_signers:
             db.refresh(s)
+
+        record_audit(db, current_user, action="Создание шаблона грамоты", entity_type="certificate_template", entity_id=template.id, details={"name": template.name})
+        db.commit()
 
         return {"template": template, "elements": _ordered_elements(new_elements), "signers": new_signers}
 
@@ -541,6 +554,7 @@ def update_template_full(
     template_id: int,
     data: TemplateFullUpdateRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_certificate_manager_user),
 ):
     """
     Атомарное обновление шаблона: метаданные + элементы + подписанты.
@@ -604,6 +618,9 @@ def update_template_full(
             db.refresh(el)
         for s in new_signers:
             db.refresh(s)
+
+        record_audit(db, current_user, action="Изменение шаблона грамоты", entity_type="certificate_template", entity_id=template.id, details={"name": template.name})
+        db.commit()
 
         return {"template": template, "elements": _ordered_elements(new_elements), "signers": new_signers}
 

@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
+from audit import record_audit
 from database import get_db
 from models import Article
 from permissions import has_permission
@@ -614,7 +615,10 @@ def create_common_admin_news(
         payload = data.model_copy(update={"publishing_scope": "imcro_only"})
     access_payload = _sync_legacy_article_payload(payload.model_dump())
     _ensure_methodist_article_access(role_name, current_user, access_payload)
-    return _create_article(db, payload, role_name=role_name, author_id=getattr(current_user, "id", None))
+    article = _create_article(db, payload, role_name=role_name, author_id=getattr(current_user, "id", None))
+    record_audit(db, current_user, action="Создание статьи", entity_type="article", entity_id=article.id, details={"title": article.title})
+    db.commit()
+    return article
 
 
 @router.patch("/api/admin/articles/{article_id}/", response_model=ArticleResponse)
@@ -631,7 +635,10 @@ def update_common_admin_news(
         raise HTTPException(status_code=404, detail="Article not found")
     access_payload = _sync_legacy_article_payload(data.model_dump(exclude_unset=True))
     _ensure_methodist_article_access(role_name, current_user, access_payload, article)
-    return _update_article(db, article_id, data, role_name=role_name)
+    updated = _update_article(db, article_id, data, role_name=role_name)
+    record_audit(db, current_user, action="Изменение статьи", entity_type="article", entity_id=updated.id, details={"fields": list(data.model_dump(exclude_unset=True).keys())})
+    db.commit()
+    return updated
 
 
 @router.delete("/api/admin/articles/{article_id}/", status_code=204)
@@ -646,7 +653,10 @@ def delete_common_admin_news(
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
     _ensure_article_owner(role_name, current_user, article)
+    deleted_title = article.title
     _delete_article(db, article_id)
+    record_audit(db, current_user, action="Удаление статьи", entity_type="article", entity_id=article_id, details={"title": deleted_title})
+    db.commit()
     return None
 
 
@@ -675,7 +685,10 @@ def create_domu_admin_news(
         raise HTTPException(status_code=400, detail="dom_uchitelya_section is required")
     _ensure_domu_editor_article_access(role_name, current_user, access_payload)
     _ensure_methodist_article_access(role_name, current_user, access_payload)
-    return _create_article(db, data, role_name=role_name, author_id=getattr(current_user, "id", None))
+    article = _create_article(db, data, role_name=role_name, author_id=getattr(current_user, "id", None))
+    record_audit(db, current_user, action="Создание статьи", entity_type="article", entity_id=article.id, details={"title": article.title, "scope": "dom_uchitelya"})
+    db.commit()
+    return article
 
 
 @router.patch("/api/admin/dom-uchitelya/news/{article_id}/", response_model=ArticleResponse)
@@ -696,7 +709,10 @@ def update_domu_admin_news(
     access_payload = _sync_legacy_article_payload(data.model_dump(exclude_unset=True))
     _ensure_domu_editor_article_access(role_name, current_user, access_payload, article)
     _ensure_methodist_article_access(role_name, current_user, access_payload, article)
-    return _update_article(db, article_id, data, role_name=role_name)
+    updated = _update_article(db, article_id, data, role_name=role_name)
+    record_audit(db, current_user, action="Изменение статьи", entity_type="article", entity_id=updated.id, details={"fields": list(data.model_dump(exclude_unset=True).keys())})
+    db.commit()
+    return updated
 
 
 @router.delete("/api/admin/dom-uchitelya/news/{article_id}/", status_code=204)
@@ -713,7 +729,10 @@ def delete_domu_admin_news(
         raise HTTPException(status_code=403, detail="Article is outside Dom uchitelya scope")
     _ensure_domu_editor_article_access(role_name, current_user, article=article)
     _ensure_methodist_article_access(role_name, current_user, article=article)
+    deleted_title = article.title
     _delete_article(db, article_id)
+    record_audit(db, current_user, action="Удаление статьи", entity_type="article", entity_id=article_id, details={"title": deleted_title, "scope": "dom_uchitelya"})
+    db.commit()
     return None
 
 

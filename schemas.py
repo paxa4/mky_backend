@@ -91,6 +91,36 @@ class RolePermissionsUpdate(BaseModel):
         return normalized
 
 
+class AuditLogResponse(BaseModel):
+    id: int
+    user_id: Optional[int] = None
+    user_name: Optional[str] = None
+    user_email: Optional[str] = None
+    action: str
+    entity_type: str
+    entity_id: Optional[int] = None
+    details: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PortalSettingsUpdate(BaseModel):
+    portal_name: str = Field("МКУ ИМЦРО", min_length=1, max_length=200)
+    contact_email: Optional[str] = Field(None, max_length=255)
+    contact_phone: Optional[str] = Field(None, max_length=100)
+    contact_address: Optional[str] = Field(None, max_length=500)
+    footer_text: Optional[str] = Field(None, max_length=500)
+
+
+class PortalSettingsResponse(PortalSettingsUpdate):
+    id: int
+    updated_by_id: Optional[int] = None
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class UserResponse(BaseModel):
     id: int
     email: str

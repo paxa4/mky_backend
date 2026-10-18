@@ -3,7 +3,8 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from auth import hash_password
+from auth import get_current_user, hash_password
+from audit import record_audit
 from database import get_db
 from models import User, UserRole
 from permissions import normalize_role_permissions, require_admin_user
@@ -66,6 +67,7 @@ def get_all_roles(db: Session = Depends(get_db)):
 def update_role_permissions(
     role_id: int,
     permissions_data: RolePermissionsUpdate,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Обновить права доступа выбранной роли к разделам системы."""
@@ -74,6 +76,14 @@ def update_role_permissions(
         raise HTTPException(status_code=404, detail="Роль не найдена")
 
     role.permissions = normalize_role_permissions(permissions_data.permissions, role.role_name)
+    record_audit(
+        db,
+        current_user,
+        action="Изменение прав роли",
+        entity_type="role",
+        entity_id=role.id,
+        details={"role": role.role_name, "permissions": role.permissions},
+    )
     db.commit()
     db.refresh(role)
     role.permissions = normalize_role_permissions(role.permissions, role.role_name)
@@ -90,7 +100,11 @@ def get_user(user_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def create_user(user_data: UserAdminCreate, db: Session = Depends(get_db)):
+def create_user(
+    user_data: UserAdminCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Создать нового пользователя."""
     _ensure_unique_user_identity(db, email=user_data.email)
     role = _role_or_400(db, user_data.role)
@@ -108,6 +122,15 @@ def create_user(user_data: UserAdminCreate, db: Session = Depends(get_db)):
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+    record_audit(
+        db,
+        current_user,
+        action="Создание пользователя",
+        entity_type="user",
+        entity_id=new_user.id,
+        details={"email": new_user.email, "role": role.role_name if role else "user"},
+    )
+    db.commit()
     return new_user
 
 
@@ -115,6 +138,7 @@ def create_user(user_data: UserAdminCreate, db: Session = Depends(get_db)):
 def update_user(
     user_id: int,
     user_data: UserAdminUpdate,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Обновить данные пользователя."""
@@ -150,16 +174,39 @@ def update_user(
 
     db.commit()
     db.refresh(user)
+    record_audit(
+        db,
+        current_user,
+        action="Изменение пользователя",
+        entity_type="user",
+        entity_id=user.id,
+        details={"fields": list(payload.keys())},
+    )
+    db.commit()
     return user
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_user(user_id: int, db: Session = Depends(get_db)):
+def delete_user(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Удалить пользователя."""
     user = db.query(User).filter_by(id=user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
 
+    deleted_email = user.email
     db.delete(user)
+    db.commit()
+    record_audit(
+        db,
+        current_user,
+        action="Удаление пользователя",
+        entity_type="user",
+        entity_id=user_id,
+        details={"email": deleted_email},
+    )
     db.commit()
     return None
