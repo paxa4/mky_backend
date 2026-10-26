@@ -361,6 +361,43 @@ class Article(Base):
         return f"id-{self.author_id}" if self.author_id else None
 
 
+class Practice(Base):
+    __tablename__ = "practice"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'draft', 'published', 'archive')",
+            name="practice_status_chk",
+        ),
+        Index("practice_status_idx", "status"),
+        Index("practice_topic_idx", "topic"),
+        Index("practice_level_idx", "level"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(300), nullable=False)
+    slug = Column(String(180), nullable=False, unique=True, index=True)
+    summary = Column(String(1200), nullable=False, default="")
+    description = Column(Text, nullable=False, default="")
+    topic = Column(String(200), nullable=False, index=True)
+    level = Column(String(40), nullable=False, default="Начальный", index=True)
+    organization = Column(String(300), nullable=False)
+    municipality = Column(String(200), nullable=True)
+    author_name = Column(String(200), nullable=False)
+    author_email = Column(String(255), nullable=True)
+    target_audience = Column(String(500), nullable=True)
+    implementation_period = Column(String(200), nullable=True)
+    results = Column(Text, nullable=True)
+    materials = Column(JSON, nullable=False, default=list)
+    cover_image_url = Column(String(500), nullable=True)
+    status = Column(String(20), nullable=False, default="draft", index=True)
+    created_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    published_at = Column(DateTime(timezone=True), nullable=True)
+
+    created_by = relationship("User", foreign_keys=[created_by_id])
+
+
 class ArticleCategory(Base):
     __tablename__ = "article_category"
     article_id = Column(Integer, ForeignKey("article.id"), primary_key=True)
@@ -387,6 +424,7 @@ __all__ = [
     "CertificateTemplate",
     "GeneratedCertificate",
     "PortalSettings",
+    "Practice",
     "Tag",
     "TemplateSigner",
     "TemplateTextElement",

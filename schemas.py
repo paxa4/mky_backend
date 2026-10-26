@@ -333,6 +333,99 @@ class ArticleListResponse(BaseModel):
     items: List[ArticleResponse]
 
 
+PRACTICE_STATUSES = {"pending", "draft", "published", "archive"}
+PRACTICE_LEVELS = {"Начальный", "Продвинутый", "Высший"}
+
+
+class PracticeBase(BaseModel):
+    title: str = Field(..., min_length=1, max_length=300)
+    slug: Optional[str] = Field(None, max_length=180)
+    summary: str = Field("", max_length=1200)
+    description: str = ""
+    topic: str = Field(..., min_length=1, max_length=200)
+    level: str = Field("Начальный", max_length=40)
+    organization: str = Field(..., min_length=1, max_length=300)
+    municipality: Optional[str] = Field(None, max_length=200)
+    author_name: str = Field(..., min_length=1, max_length=200)
+    author_email: Optional[EmailStr] = None
+    target_audience: Optional[str] = Field(None, max_length=500)
+    implementation_period: Optional[str] = Field(None, max_length=200)
+    results: Optional[str] = None
+    materials: List[Dict[str, Any]] = Field(default_factory=list)
+    cover_image_url: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("level")
+    @classmethod
+    def _validate_level(cls, value: str) -> str:
+        if value not in PRACTICE_LEVELS:
+            raise ValueError("level must be Начальный, Продвинутый, or Высший")
+        return value
+
+
+class PracticeSubmissionCreate(PracticeBase):
+    pass
+
+
+class PracticeAdminCreate(PracticeBase):
+    status: str = "draft"
+
+    @field_validator("status")
+    @classmethod
+    def _validate_status(cls, value: str) -> str:
+        if value not in PRACTICE_STATUSES:
+            raise ValueError("status must be pending, draft, published, or archive")
+        return value
+
+
+class PracticeAdminUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=300)
+    slug: Optional[str] = Field(None, max_length=180)
+    summary: Optional[str] = Field(None, max_length=1200)
+    description: Optional[str] = None
+    topic: Optional[str] = Field(None, min_length=1, max_length=200)
+    level: Optional[str] = Field(None, max_length=40)
+    organization: Optional[str] = Field(None, min_length=1, max_length=300)
+    municipality: Optional[str] = Field(None, max_length=200)
+    author_name: Optional[str] = Field(None, min_length=1, max_length=200)
+    author_email: Optional[EmailStr] = None
+    target_audience: Optional[str] = Field(None, max_length=500)
+    implementation_period: Optional[str] = Field(None, max_length=200)
+    results: Optional[str] = None
+    materials: Optional[List[Dict[str, Any]]] = None
+    cover_image_url: Optional[str] = Field(None, max_length=500)
+    status: Optional[str] = None
+
+    @field_validator("level")
+    @classmethod
+    def _validate_level(cls, value: str | None) -> str | None:
+        if value is not None and value not in PRACTICE_LEVELS:
+            raise ValueError("level must be Начальный, Продвинутый, or Высший")
+        return value
+
+    @field_validator("status")
+    @classmethod
+    def _validate_status(cls, value: str | None) -> str | None:
+        if value is not None and value not in PRACTICE_STATUSES:
+            raise ValueError("status must be pending, draft, published, or archive")
+        return value
+
+
+class PracticeResponse(PracticeBase):
+    id: int
+    status: str
+    created_by_id: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+    published_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class PracticeListResponse(BaseModel):
+    items: List[PracticeResponse]
+    total: int
+
+
 # ====================== ШАБЛОНЫ ======================
 class CertificateTemplateCreate(BaseModel):
     name: str = Field(..., max_length=200)
