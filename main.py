@@ -53,6 +53,7 @@ from routers.appointments import router as appointments_router
 from routers.articles import router as articles_router
 from routers.audit import router as audit_router
 from routers.portal_settings import router as portal_settings_router
+from routers.practices import router as practices_router
 from utils.schema_patch import (
     ensure_certificate_layout_columns,
     ensure_article_editor_columns,
@@ -307,6 +308,7 @@ app.include_router(appointments_router)
 app.include_router(articles_router)
 app.include_router(audit_router)
 app.include_router(portal_settings_router)
+app.include_router(practices_router)
 app.include_router(tpmpk_router)
 app.include_router(dom_uchitelya_router)
 
