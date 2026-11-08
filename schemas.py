@@ -129,6 +129,7 @@ class UserResponse(BaseModel):
     middle_name: Optional[str] = None
     created_at: Optional[datetime] = None
     is_active: bool
+    email_verified: bool = True
     role: str = "user"
     can_access_internal_docs: bool = False
     permissions: Dict[str, str] = Field(default_factory=dict)
@@ -153,6 +154,12 @@ class UserResponse(BaseModel):
     def _normalize_internal_docs_access(cls, value):
         return bool(value)
 
+    @field_validator("email_verified", mode="before")
+    @classmethod
+    def _normalize_email_verified(cls, value):
+        # У объекта, ещё не сохранённого в БД, значение может быть None
+        return True if value is None else bool(value)
+
     model_config = {"from_attributes": True}
 
 
@@ -166,6 +173,14 @@ class Token(BaseModel):
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str = Field(..., min_length=1)
+
+
+class EmailVerifyRequest(BaseModel):
+    token: str = Field(..., min_length=1)
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
 
 
 class TokenData(BaseModel):

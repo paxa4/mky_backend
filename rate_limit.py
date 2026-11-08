@@ -41,7 +41,7 @@ DEFAULT_RATE_LIMIT_RULES: tuple[RateLimitRule, ...] = (
         limit=10,
         window_seconds=60,
         methods=("POST",),
-        exact_paths=("/auth/login", "/auth/register"),
+        exact_paths=("/auth/login", "/auth/register", "/auth/resend-verification", "/auth/verify-email"),
     ),
     RateLimitRule(
         name="tpmpk_appointment",

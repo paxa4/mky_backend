@@ -84,6 +84,7 @@ def main() -> None:
             user.password_hash = hash_password(password)
             user.role_id = role.id
             user.is_active = True
+            user.email_verified = True
             user.last_name = LAST_NAME
             user.first_name = FIRST_NAME
             user.middle_name = MIDDLE_NAME
@@ -98,6 +99,7 @@ def main() -> None:
                 first_name=FIRST_NAME,
                 middle_name=MIDDLE_NAME,
                 is_active=True,
+                email_verified=True,
                 role_id=role.id,
             )
             db.add(user)

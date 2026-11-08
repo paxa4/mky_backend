@@ -3,11 +3,11 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import func, or_, text
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from difflib import SequenceMatcher
 import asyncio
@@ -30,8 +30,13 @@ from auth import (
     hash_password, verify_password, create_access_token, create_refresh_token,
     get_current_user, get_user_from_refresh_token,
     ACCESS_TOKEN_EXPIRE_MINUTES, REFRESH_TOKEN_EXPIRE_DAYS,
+    create_email_verification_token, decode_email_verification_token,
 )
-from schemas import RefreshTokenRequest, UserCreate, UserProfileUpdate, UserResponse, Token
+from email_service import send_verification_email
+from schemas import (
+    EmailVerifyRequest, RefreshTokenRequest, ResendVerificationRequest,
+    UserCreate, UserProfileUpdate, UserResponse, Token,
+)
 from api import tpmpk_router
 from dom_uchitelya import router as dom_uchitelya_router
 
@@ -574,6 +579,7 @@ def _user_response(db: Session, user: User) -> UserResponse:
         middle_name=getattr(user, "middle_name", None),
         created_at=getattr(user, "created_at", None),
         is_active=user.is_active,
+        email_verified=bool(getattr(user, "email_verified", True)),
         role=role.role_name if role else None,
         can_access_internal_docs=bool(
             getattr(role, "can_access_internal_docs", False)
@@ -614,21 +620,127 @@ def _password_matches_or_upgrade(db: Session, user: User, plain_password: str) -
     return False
 
 
+# Если EMAIL_VERIFICATION_REQUIRED=false — регистрация работает как раньше (без письма)
+EMAIL_VERIFICATION_REQUIRED = os.getenv("EMAIL_VERIFICATION_REQUIRED", "true").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+
+
+# Минимальный интервал между письмами одному пользователю
+EMAIL_RESEND_COOLDOWN_SECONDS = int(os.getenv("EMAIL_RESEND_COOLDOWN_SECONDS", "60"))
+
+
+def _normalize_email(email: str) -> str:
+    # User@Mail.ru и user@mail.ru — один и тот же ящик
+    return str(email or "").strip().lower()
+
+
+def _find_user_by_email(db: Session, email: str) -> User | None:
+    # Сравнение без учёта регистра, чтобы находились и старые аккаунты,
+    # созданные до нормализации email
+    return db.query(User).filter(func.lower(User.email) == _normalize_email(email)).first()
+
+
+def _claim_verification_email_slot(db: Session, user: User) -> bool:
+    """
+    Атомарно «занимает» право отправить письмо: одним SQL-запросом
+        UPDATE users SET verification_email_sent_at = now
+        WHERE id = ... AND email_verified = false
+          AND (verification_email_sent_at IS NULL OR verification_email_sent_at <= now - 60 сек)
+    База выполняет такой UPDATE для строки по очереди, поэтому из нескольких
+    одновременных запросов строку обновит только один — только он и отправит письмо.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=EMAIL_RESEND_COOLDOWN_SECONDS)
+    updated = (
+        db.query(User)
+        .filter(
+            User.id == user.id,
+            User.email_verified.is_(False),
+            or_(
+                User.verification_email_sent_at.is_(None),
+                User.verification_email_sent_at <= cutoff,
+            ),
+        )
+        .update({User.verification_email_sent_at: now}, synchronize_session=False)
+    )
+    db.commit()
+    return updated == 1
+
+
+def _schedule_verification_email(
+    user: User,
+    background_tasks: BackgroundTasks | None,
+) -> None:
+    token = create_email_verification_token(user.email)
+    if background_tasks is not None:
+        # Письмо уходит после того, как ответ уже отправлен клиенту,
+        # поэтому медленный SMTP-сервер не тормозит регистрацию
+        background_tasks.add_task(send_verification_email, user.email, token)
+    else:
+        send_verification_email(user.email, token)
+
+
 @app.post("/auth/register", response_model=UserResponse, status_code=201)
-def register(user_data: UserCreate, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.email == user_data.email).first():
+def register(
+    user_data: UserCreate,
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
+):
+    email = _normalize_email(user_data.email)
+    if _find_user_by_email(db, email):
         raise HTTPException(status_code=400, detail="Email уже зарегистрирован")
     user = User(
-        email=user_data.email,
+        email=email,
         last_name=user_data.last_name,
         first_name=user_data.first_name,
         middle_name=user_data.middle_name,
         password_hash=hash_password(user_data.password),
+        email_verified=not EMAIL_VERIFICATION_REQUIRED,
+        verification_email_sent_at=datetime.now(timezone.utc) if EMAIL_VERIFICATION_REQUIRED else None,
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Два одновременных запроса с одним email: оба прошли проверку выше,
+        # но UNIQUE-ограничение в БД пропустило только первый INSERT
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Email уже зарегистрирован")
     db.refresh(user)
+    if EMAIL_VERIFICATION_REQUIRED:
+        _schedule_verification_email(user, background_tasks)
     return _user_response(db, user)
+
+
+@app.post("/auth/verify-email")
+def verify_email(payload: EmailVerifyRequest, db: Session = Depends(get_db)):
+    email = decode_email_verification_token(payload.token)
+    user = _find_user_by_email(db, email)
+    if user is None:
+        raise HTTPException(status_code=400, detail="Ссылка подтверждения недействительна или устарела")
+    if not user.email_verified:
+        user.email_verified = True
+        db.commit()
+    return {"message": "Почта подтверждена. Теперь можно войти.", "email": user.email}
+
+
+@app.post("/auth/resend-verification")
+def resend_verification(
+    payload: ResendVerificationRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    user = _find_user_by_email(db, payload.email)
+    if user is not None and _claim_verification_email_slot(db, user):
+        _schedule_verification_email(user, background_tasks)
+    # Ответ одинаковый в любом случае (нет такого email, уже подтверждён, не прошло 60 секунд),
+    # чтобы по нему нельзя было узнать, зарегистрирован ли адрес.
+    # retry_after_seconds — подсказка фронтенду, на сколько заблокировать кнопку.
+    return {
+        "message": "Если адрес зарегистрирован и не подтверждён, мы отправили письмо повторно.",
+        "retry_after_seconds": EMAIL_RESEND_COOLDOWN_SECONDS,
+    }
 
 
 @app.post("/auth/login", response_model=Token)
@@ -636,12 +748,17 @@ def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-    user = db.query(User).filter(User.email == form_data.username).first()
+    user = _find_user_by_email(db, form_data.username)
     if not user or not _password_matches_or_upgrade(db, user, form_data.password):
         raise HTTPException(
             status_code=401,
             detail="Неверный логин или пароль",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+    if EMAIL_VERIFICATION_REQUIRED and not getattr(user, "email_verified", True):
+        raise HTTPException(
+            status_code=403,
+            detail="Почта не подтверждена. Перейдите по ссылке из письма, которое мы отправили при регистрации.",
         )
     return _token_response(db, user)
 

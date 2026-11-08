@@ -107,6 +107,7 @@ def ensure_dev_test_users(
                 middle_name=credentials["middle_name"],
                 password_hash=hash_password(credentials["password"]),
                 is_active=True,
+                email_verified=True,
                 role_id=role.id,
             )
             db.add(user)
@@ -116,6 +117,7 @@ def ensure_dev_test_users(
         user.first_name = credentials["first_name"]
         user.middle_name = credentials["middle_name"]
         user.is_active = True
+        user.email_verified = True
         user.role_id = role.id
         if not verify_password(credentials["password"], user.password_hash):
             user.password_hash = hash_password(credentials["password"])
