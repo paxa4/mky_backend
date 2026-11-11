@@ -17,6 +17,8 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "14"))
 ACCESS_TOKEN_TYPE = "access"
 REFRESH_TOKEN_TYPE = "refresh"
+EMAIL_VERIFY_TOKEN_TYPE = "email_verify"
+EMAIL_VERIFY_TOKEN_EXPIRE_HOURS = int(os.getenv("EMAIL_VERIFY_TOKEN_EXPIRE_HOURS", "24"))
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 optional_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
@@ -108,3 +110,29 @@ def get_optional_current_user(
 
 def get_user_from_refresh_token(refresh_token: str, db: Session) -> User:
     return _get_user_from_token(refresh_token, db, expected_type=REFRESH_TOKEN_TYPE)
+
+
+# ── Подтверждение почты ───────────────────────────────────────────────────────
+
+def create_email_verification_token(email: str) -> str:
+    """Токен для ссылки из письма. Тип 'email_verify' — его нельзя использовать для входа."""
+    return _create_token(
+        data={"sub": email},
+        token_type=EMAIL_VERIFY_TOKEN_TYPE,
+        expires_delta=timedelta(hours=EMAIL_VERIFY_TOKEN_EXPIRE_HOURS),
+    )
+
+
+def decode_email_verification_token(token: str) -> str:
+    """Проверяет подпись, срок и тип токена. Возвращает email или выбрасывает HTTP 400."""
+    invalid = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Ссылка подтверждения недействительна или устарела",
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        raise invalid
+    if payload.get("type") != EMAIL_VERIFY_TOKEN_TYPE or not payload.get("sub"):
+        raise invalid
+    return payload["sub"]

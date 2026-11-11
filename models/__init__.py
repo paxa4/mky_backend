@@ -54,6 +54,8 @@ class User(Base):
     first_name = Column(String(100), nullable=True)
     middle_name = Column(String(100), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
+    email_verified = Column(Boolean, default=False, nullable=False)
+    verification_email_sent_at = Column(DateTime(timezone=True), nullable=True)
     role_id = Column(Integer, ForeignKey("user_role.id"), nullable=True)
     allowed_methodika_subjects = Column(JSON, nullable=False, default=list)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

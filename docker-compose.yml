@@ -13,7 +13,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
+  mailpit:
+    image: axllent/mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
   app:
     build: .
     restart: unless-stopped

@@ -164,6 +164,7 @@ def create_user(
         first_name=user_data.first_name,
         middle_name=user_data.middle_name,
         is_active=user_data.is_active,
+        email_verified=True,  # пользователя создал администратор — подтверждать почту не нужно
         role_id=role.id if role else None,
         allowed_methodika_subjects=user_data.allowed_methodika_subjects,
     )
