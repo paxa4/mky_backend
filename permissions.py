@@ -17,6 +17,7 @@ MODULE_KEYS = frozenset({
     "tpmpk",
     "audit_log",
     "portal_settings",
+    "practice_expert",
 })
 
 DEFAULT_ROLE_PERMISSIONS = {
@@ -28,6 +29,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "tpmpk": "edit",
         "audit_log": "view",
         "portal_settings": "edit",
+        "practice_expert": "none",
     },
     "methodist": {
         "articles": "edit",
@@ -37,6 +39,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "tpmpk": "none",
         "audit_log": "view",
         "portal_settings": "none",
+        "practice_expert": "none",
     },
     "metodist_editor": {
         "articles": "edit",
@@ -46,6 +49,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "tpmpk": "none",
         "audit_log": "view",
         "portal_settings": "none",
+        "practice_expert": "none",
     },
     "operator": {
         "articles": "none",
@@ -55,6 +59,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "tpmpk": "edit",
         "audit_log": "view",
         "portal_settings": "none",
+        "practice_expert": "none",
     },
     "tpmpk_admin": {
         "articles": "none",
@@ -64,6 +69,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "tpmpk": "edit",
         "audit_log": "view",
         "portal_settings": "none",
+        "practice_expert": "none",
     },
     "tpmpk_operator": {
         "articles": "none",
@@ -73,6 +79,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "tpmpk": "edit",
         "audit_log": "view",
         "portal_settings": "none",
+        "practice_expert": "none",
     },
     "domu_editor": {
         "articles": "edit",
@@ -82,6 +89,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "tpmpk": "none",
         "audit_log": "view",
         "portal_settings": "none",
+        "practice_expert": "none",
     },
     "user": {
         "articles": "none",
@@ -91,6 +99,17 @@ DEFAULT_ROLE_PERMISSIONS = {
         "tpmpk": "none",
         "audit_log": "none",
         "portal_settings": "none",
+        "practice_expert": "none",
+    },
+    "practice_expert": {
+        "articles": "none",
+        "certificates": "none",
+        "certificate_templates": "none",
+        "users_roles": "none",
+        "tpmpk": "none",
+        "audit_log": "none",
+        "portal_settings": "none",
+        "practice_expert": "edit",
     },
 }
 

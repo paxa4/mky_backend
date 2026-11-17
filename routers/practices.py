@@ -5,19 +5,24 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from audit import record_audit
 from auth import get_optional_current_user
 from database import get_db
-from models import Practice, User
+from models import Practice, PracticeConclusion, User
 from permissions import require_permission
 from schemas import (
     PracticeAdminCreate,
     PracticeAdminUpdate,
+    PracticeConclusionCreate,
+    PracticeConclusionListResponse,
+    PracticeConclusionResponse,
     PracticeListResponse,
+    PracticeMapResponse,
     PracticeResponse,
+    PracticeStatisticsResponse,
     PracticeSubmissionCreate,
 )
 
@@ -25,7 +30,45 @@ from schemas import (
 router = APIRouter(tags=["practices"])
 
 PRACTICE_LEVELS = {"Начальный", "Продвинутый", "Высший"}
+PRACTICE_UNASSIGNED_LEVEL = "Не присвоен"
 PRACTICE_STATUSES = {"pending", "draft", "published", "archive"}
+
+
+@router.get("/api/practices/statistics/", response_model=PracticeStatisticsResponse)
+def get_public_practice_statistics(db: Session = Depends(get_db)):
+    rows = (
+        db.query(Practice.topic, Practice.level, func.count(Practice.id))
+        .filter(Practice.status == "published")
+        .group_by(Practice.topic, Practice.level)
+        .all()
+    )
+    by_level = {level: 0 for level in PRACTICE_LEVELS}
+    by_topic: dict[str, dict] = {}
+    total = 0
+    for topic, level, count in rows:
+        count = int(count)
+        total += count
+        by_level[level] = by_level.get(level, 0) + count
+        topic_data = by_topic.setdefault(topic, {"topic": topic, "total": 0, "levels": {key: 0 for key in PRACTICE_LEVELS}})
+        topic_data["total"] += count
+        topic_data["levels"][level] = topic_data["levels"].get(level, 0) + count
+    return {
+        "total": total,
+        "by_level": by_level,
+        "by_topic": sorted(by_topic.values(), key=lambda item: item["topic"].casefold()),
+    }
+
+
+@router.get("/api/practices/map/", response_model=PracticeMapResponse)
+def get_public_practice_map(db: Session = Depends(get_db)):
+    query = db.query(Practice).filter(Practice.status == "published")
+    located = (
+        query.filter(Practice.latitude.isnot(None), Practice.longitude.isnot(None))
+        .order_by(Practice.title.asc())
+        .all()
+    )
+    unlocated_total = query.filter(or_(Practice.latitude.is_(None), Practice.longitude.is_(None))).count()
+    return {"items": located, "total": len(located), "unlocated_total": unlocated_total}
 
 
 def _slugify(value: str) -> str:
@@ -52,9 +95,19 @@ def _validate_status(value: str | None) -> str:
 
 def _validate_level(value: str | None) -> str:
     normalized = str(value or "Начальный").strip()
-    if normalized not in PRACTICE_LEVELS:
+    if normalized not in PRACTICE_LEVELS | {PRACTICE_UNASSIGNED_LEVEL}:
         raise HTTPException(status_code=422, detail="Недопустимый уровень становления практики")
     return normalized
+
+
+def _public_practice_payload(practice: Practice) -> dict:
+    payload = PracticeResponse.model_validate(practice).model_dump()
+    payload["author_email"] = None
+    application_data = dict(payload.get("application_data") or {})
+    for key in ("curator_work_phone", "curator_email", "curator_mobile"):
+        application_data.pop(key, None)
+    payload["application_data"] = application_data
+    return payload
 
 
 def _query_practices(
@@ -130,7 +183,7 @@ def list_public_practices(
         .limit(limit)
         .all()
     )
-    return {"items": items, "total": total}
+    return {"items": [_public_practice_payload(item) for item in items], "total": total}
 
 
 @router.post("/api/practices/submit/", response_model=PracticeResponse, status_code=status.HTTP_201_CREATED)
@@ -159,12 +212,101 @@ def submit_practice(
     )
     db.commit()
     db.refresh(practice)
-    return practice
+    return _public_practice_payload(practice)
+
+
+@router.get(
+    "/api/practices/{practice_id_or_slug}/conclusions/",
+    response_model=PracticeConclusionListResponse,
+)
+def get_practice_conclusions(
+    practice_id_or_slug: str,
+    current_user: User | None = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    practice = _get_practice_or_404(db, practice_id_or_slug, published_only=True)
+    conclusions = (
+        db.query(PracticeConclusion)
+        .filter(PracticeConclusion.practice_id == practice.id)
+        .order_by(PracticeConclusion.created_at.asc(), PracticeConclusion.id.asc())
+        .all()
+    )
+    items = [
+        {
+            "id": item.id,
+            "practice_id": item.practice_id,
+            "expert_name": item.expert_name,
+            "content": item.content,
+            "created_at": item.created_at,
+            "updated_at": item.updated_at,
+            "is_mine": bool(current_user and item.expert_user_id == current_user.id),
+        }
+        for item in conclusions
+    ]
+    return {"items": items, "total": len(items)}
+
+
+@router.post(
+    "/api/practices/{practice_id_or_slug}/conclusions/",
+    response_model=PracticeConclusionResponse,
+)
+def save_practice_conclusion(
+    practice_id_or_slug: str,
+    data: PracticeConclusionCreate,
+    current_user: User = Depends(require_permission("practice_expert", "edit")),
+    db: Session = Depends(get_db),
+):
+    practice = _get_practice_or_404(db, practice_id_or_slug, published_only=True)
+    conclusion = (
+        db.query(PracticeConclusion)
+        .filter(
+            PracticeConclusion.practice_id == practice.id,
+            PracticeConclusion.expert_user_id == current_user.id,
+        )
+        .first()
+    )
+    is_new = conclusion is None
+    expert_name = " ".join(
+        part for part in (current_user.last_name, current_user.first_name, current_user.middle_name) if part
+    ) or current_user.email
+    if is_new:
+        conclusion = PracticeConclusion(
+            practice_id=practice.id,
+            expert_user_id=current_user.id,
+            expert_name=expert_name,
+            content=data.content,
+        )
+        db.add(conclusion)
+    else:
+        conclusion.expert_name = expert_name
+        conclusion.content = data.content
+        conclusion.updated_at = datetime.now(timezone.utc)
+    db.flush()
+    record_audit(
+        db,
+        current_user,
+        action="Экспертное заключение по практике",
+        entity_type="practice",
+        entity_id=practice.id,
+        details={"title": practice.title, "operation": "создание" if is_new else "обновление"},
+    )
+    db.commit()
+    db.refresh(conclusion)
+    return {
+        "id": conclusion.id,
+        "practice_id": conclusion.practice_id,
+        "expert_name": conclusion.expert_name,
+        "content": conclusion.content,
+        "created_at": conclusion.created_at,
+        "updated_at": conclusion.updated_at,
+        "is_mine": True,
+    }
 
 
 @router.get("/api/practices/{practice_id_or_slug}", response_model=PracticeResponse)
 def get_public_practice(practice_id_or_slug: str, db: Session = Depends(get_db)):
-    return _get_practice_or_404(db, practice_id_or_slug, published_only=True)
+    practice = _get_practice_or_404(db, practice_id_or_slug, published_only=True)
+    return _public_practice_payload(practice)
 
 
 @router.get("/api/admin/practices/", response_model=PracticeListResponse)
@@ -204,6 +346,8 @@ def create_practice(
     payload["slug"] = _unique_slug(db, payload.get("slug") or payload["title"])
     payload["level"] = _validate_level(payload.get("level"))
     payload["status"] = _validate_status(payload.get("status"))
+    if payload["status"] == "published" and payload["level"] == PRACTICE_UNASSIGNED_LEVEL:
+        raise HTTPException(status_code=422, detail="Перед публикацией назначьте уровень становления по итогам экспертизы")
     payload["created_by_id"] = current_user.id
     if payload["status"] == "published":
         payload["published_at"] = datetime.now(timezone.utc)
@@ -244,6 +388,12 @@ def update_practice(
             changes["published_at"] = datetime.now(timezone.utc)
         elif changes["status"] != "published":
             changes["published_at"] = None
+    if changes.get("status", practice.status) == "published" and changes.get("level", practice.level) == PRACTICE_UNASSIGNED_LEVEL:
+        raise HTTPException(status_code=422, detail="Перед публикацией назначьте уровень становления по итогам экспертизы")
+    latitude = changes.get("latitude", practice.latitude)
+    longitude = changes.get("longitude", practice.longitude)
+    if (latitude is None) != (longitude is None):
+        raise HTTPException(status_code=422, detail="Широта и долгота должны быть указаны вместе")
     for key, value in changes.items():
         setattr(practice, key, value)
     db.flush()

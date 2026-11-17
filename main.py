@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 from typing import Any
 
 from database import engine, Base, SessionLocal, format_database_connection_error, get_db
@@ -23,7 +24,7 @@ from assistant_settings import (
     load_assistant_settings,
     register_settings_listener,
 )
-from models import User, UserRole
+from models import Article, Practice, User, UserRole
 from permissions import user_permissions
 from rate_limit import RateLimitMiddleware
 from auth import (
@@ -83,6 +84,13 @@ logger = logging.getLogger("main")
 
 SITE_SEARCH_INDEX = [
     {"title": "Главная", "url": "/", "description": "Новости, мероприятия и основные разделы сайта."},
+    {"title": "Новости", "url": "/novosti/", "description": "Новости и публикации МКУ развития образования города Иркутска."},
+    {"title": "Безопасность", "url": "/bezopasnost/", "description": "Материалы по информационной и образовательной безопасности."},
+    {"title": "Каталог образовательных практик", "url": "/praktiki/", "description": "Практики образовательных организаций региона."},
+    {"title": "Сведения об образовательной организации", "url": "/sveden/", "description": "Основные сведения, документы, образование и руководство учреждения."},
+    {"title": "Документы организации", "url": "/sveden/document/", "description": "Устав, локальные нормативные акты и официальные документы."},
+    {"title": "Образование", "url": "/sveden/education/", "description": "Информация об образовательной деятельности учреждения."},
+    {"title": "Руководство", "url": "/sveden/employees/", "description": "Руководители и сотрудники организации."},
     {"title": "ТПМПК", "url": "/tpmpk/", "description": "Раздел территориальной психолого-медико-педагогической комиссии."},
     {"title": "Запись на обследование ПМПК", "url": "/tpmpk/zapis", "description": "Онлайн-заявка на обследование ребенка."},
     {"title": "Документы ТПМПК", "url": "/tpmpk/dokumenty/", "description": "Перечень документов для прохождения комиссии."},
@@ -94,11 +102,14 @@ SITE_SEARCH_INDEX = [
     {"title": "Для родителей", "url": "/tpmpk/dlya-roditeley/", "description": "Памятки и рекомендации для семей."},
     {"title": "Для педагогов", "url": "/tpmpk/dlya-pedagogov/", "description": "Материалы для образовательных организаций."},
     {"title": "Контакты ТПМПК", "url": "/tpmpk/kontakty/", "description": "Телефон, адрес и порядок обращения."},
-    {"title": "Сведения об образовательной организации", "url": "/", "description": "Основная информация об учреждении."},
     {"title": "Дом учителя", "url": "/dom-uchitelya/", "description": "Городские образовательные мероприятия и методическая поддержка."},
     {"title": "Новости Дома учителя", "url": "/dom-uchitelya/novosti/", "description": "Собственная лента новостей Дома учителя."},
     {"title": "Программа Дома учителя", "url": "/dom-uchitelya/programma/", "description": "Программа мероприятий Дома учителя."},
-    {"title": "Методическое пространство", "url": "/", "description": "Материалы, проекты и события для педагогов."},
+    {"title": "Конкурсы и олимпиады", "url": "/konkursy/", "description": "Конкурсы, олимпиады и конференции для обучающихся и педагогов."},
+    {"title": "Образовательные события", "url": "/obrazovatelnye-sobytiya/", "description": "Календарь образовательных событий, конференций и семинаров."},
+    {"title": "Деятельность", "url": "/deyatelnost/", "description": "Направления и проекты организации."},
+    {"title": "Архив", "url": "/archiv/", "description": "Архив образовательных проектов и материалов."},
+    {"title": "Методическое пространство", "url": "/metodicheskoe-prostranstvo/", "description": "Материалы, проекты и события для педагогов."},
 ]
 
 legacy_redirect_map = {
@@ -128,6 +139,103 @@ def _score_page(query: str, page: dict) -> float:
     if needle in haystack:
         return 1.0
     return SequenceMatcher(None, needle, haystack).ratio()
+
+
+def _flatten_search_value(value: Any) -> str:
+    if isinstance(value, dict):
+        return " ".join(_flatten_search_value(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(_flatten_search_value(item) for item in value)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _score_search_fields(query: str, fields: list[tuple[str, float]]) -> float:
+    needle = _normalize_search_text(query).replace("ё", "е")
+    if not needle:
+        return 0
+    tokens = needle.split()
+    best = 0.0
+    for value, weight in fields:
+        haystack = _normalize_search_text(value).replace("ё", "е")
+        if not haystack:
+            continue
+        if needle in haystack:
+            best = max(best, weight * (1.0 if haystack == needle else 0.94))
+            continue
+        matched = sum(token in haystack for token in tokens)
+        if matched:
+            coverage = matched / len(tokens)
+            best = max(best, weight * (0.48 + 0.42 * coverage))
+    return best
+
+
+def _search_article_records(query: str, db: Session) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    articles = (
+        db.query(Article)
+        .filter(
+            Article.status == "published",
+            ((Article.published_at == None) | (Article.published_at <= now)),  # noqa: E711
+        )
+        .all()
+    )
+    results = []
+    for article in articles:
+        section_labels = " ".join(
+            str(section.get("label") or section.get("path") or section.get("key") or "")
+            if isinstance(section, dict) else str(section)
+            for section in (article.sections or [])
+        )
+        body_text = re.sub(r"<[^>]*>", " ", " ".join((article.body or "", article.content or "")))
+        block_text = _flatten_search_value(article.blocks or [])
+        fields = [
+            (article.title or "", 1.0),
+            (" ".join((article.lead or "", article.excerpt or "")), 0.82),
+            (" ".join((body_text, block_text, _flatten_search_value(article.tags or []))), 0.68),
+            (" ".join((section_labels, article.methodika_subject or "", article.hub_path or "")), 0.62),
+        ]
+        score = _score_search_fields(query, fields)
+        if score <= 0:
+            continue
+        snippet = re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", article.lead or article.excerpt or body_text or block_text)).strip()
+        description = " ".join((snippet[:300], section_labels)).strip()
+        results.append({
+            "type": "article",
+            "title": article.title,
+            "url": f"/article/{article.slug or article.id}",
+            "description": description[:360] or "Опубликованный материал сайта.",
+            "section": section_labels,
+            "score": score,
+            "published_at": article.published_at.isoformat() if article.published_at else None,
+        })
+    return results
+
+
+def _search_practice_records(query: str, db: Session) -> list[dict]:
+    practices = db.query(Practice).filter(Practice.status == "published").all()
+    results = []
+    for practice in practices:
+        fields = [
+            (practice.title or "", 1.0),
+            (" ".join((practice.summary or "", practice.topic or "")), 0.86),
+            (" ".join((practice.description or "", practice.results or "")), 0.68),
+            (" ".join((practice.organization or "", practice.municipality or "", practice.author_name or "", practice.target_audience or "")), 0.62),
+        ]
+        score = _score_search_fields(query, fields)
+        if score <= 0:
+            continue
+        results.append({
+            "type": "practice",
+            "title": practice.title,
+            "url": f"/praktiki/{practice.slug}/",
+            "description": " · ".join(value for value in (practice.summary, practice.topic, practice.organization) if value)[:360],
+            "section": "Каталог образовательных практик",
+            "score": score,
+            "published_at": practice.published_at.isoformat() if practice.published_at else None,
+        })
+    return results
 
 
 def _pg_trgm_suggestions(query: str, db: Session | None = None, limit: int = 3) -> list[dict]:
@@ -321,21 +429,42 @@ app.include_router(dom_uchitelya_router)
 # ── Состояние фоновых задач ───────────────────────────────────────────────────
 
 @app.get("/api/search/")
-def site_search(q: str = Query("", max_length=120), db: Session = Depends(get_db)):
+def site_search(
+    q: str = Query("", max_length=120),
+    kind: str = Query("all", alias="type", pattern="^(all|page|article|practice)$"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
     query = q.strip()
     if not query:
-        return {"query": query, "results": SITE_SEARCH_INDEX[:6]}
+        return {"query": query, "type": kind, "total": 0, "results": []}
 
-    trgm = _pg_trgm_suggestions(query, db=db, limit=6)
-    if trgm:
-        return {"query": query, "results": trgm}
+    results = []
+    if kind in {"all", "page"}:
+        for page in SITE_SEARCH_INDEX:
+            score = _score_search_fields(query, [
+                (page["title"], 1.0),
+                (page.get("description", ""), 0.72),
+                (page["url"], 0.55),
+            ])
+            if score <= 0:
+                score = _score_page(query, page) * 0.55
+            if score >= 0.12:
+                results.append({**page, "type": "page", "section": "Разделы сайта", "score": score})
+    if kind in {"all", "article"}:
+        results.extend(_search_article_records(query, db))
+    if kind in {"all", "practice"}:
+        results.extend(_search_practice_records(query, db))
 
-    ranked = sorted(
-        SITE_SEARCH_INDEX,
-        key=lambda page: _score_page(query, page),
-        reverse=True,
-    )
-    return {"query": query, "results": ranked[:6]}
+    results.sort(key=lambda item: (-item["score"], item["title"].casefold()))
+    total = len(results)
+    return {
+        "query": query,
+        "type": kind,
+        "total": total,
+        "results": results[offset:offset + limit],
+    }
 
 
 @app.exception_handler(StarletteHTTPException)

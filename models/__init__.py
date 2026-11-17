@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, text
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -370,6 +370,10 @@ class Practice(Base):
             "status IN ('pending', 'draft', 'published', 'archive')",
             name="practice_status_chk",
         ),
+        CheckConstraint(
+            "(latitude IS NULL AND longitude IS NULL) OR (latitude IS NOT NULL AND longitude IS NOT NULL)",
+            name="practice_location_pair_chk",
+        ),
         Index("practice_status_idx", "status"),
         Index("practice_topic_idx", "topic"),
         Index("practice_level_idx", "level"),
@@ -382,8 +386,13 @@ class Practice(Base):
     description = Column(Text, nullable=False, default="")
     topic = Column(String(200), nullable=False, index=True)
     level = Column(String(40), nullable=False, default="Начальный", index=True)
+    practice_type = Column(String(40), nullable=True)
+    implementation_level = Column(String(40), nullable=True)
+    application_data = Column(JSON, nullable=False, default=dict)
     organization = Column(String(300), nullable=False)
     municipality = Column(String(200), nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
     author_name = Column(String(200), nullable=False)
     author_email = Column(String(255), nullable=True)
     target_audience = Column(String(500), nullable=True)
@@ -398,6 +407,26 @@ class Practice(Base):
     published_at = Column(DateTime(timezone=True), nullable=True)
 
     created_by = relationship("User", foreign_keys=[created_by_id])
+    conclusions = relationship("PracticeConclusion", back_populates="practice", cascade="all, delete-orphan")
+
+
+class PracticeConclusion(Base):
+    __tablename__ = "practice_conclusion"
+    __table_args__ = (
+        UniqueConstraint("practice_id", "expert_user_id", name="practice_conclusion_expert_unique"),
+        Index("practice_conclusion_practice_idx", "practice_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    practice_id = Column(Integer, ForeignKey("practice.id", ondelete="CASCADE"), nullable=False)
+    expert_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    expert_name = Column(String(300), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    practice = relationship("Practice", back_populates="conclusions")
+    expert_user = relationship("User")
 
 
 class ArticleCategory(Base):
@@ -427,6 +456,7 @@ __all__ = [
     "GeneratedCertificate",
     "PortalSettings",
     "Practice",
+    "PracticeConclusion",
     "Tag",
     "TemplateSigner",
     "TemplateTextElement",

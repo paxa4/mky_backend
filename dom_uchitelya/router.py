@@ -675,6 +675,22 @@ def get_common_news(
     return _query_public_news(db, COMMON_PUBLIC_SCOPES, limit, offset)
 
 
+@router.get("/api/public/articles/{identifier}", response_model=ArticleResponse)
+def get_public_article(identifier: str, db: Session = Depends(get_db)):
+    now = datetime.now(timezone.utc)
+    query = db.query(Article).filter(
+        Article.status == "published",
+        ((Article.published_at == None) | (Article.published_at <= now)),  # noqa: E711
+    )
+    if identifier.isdigit():
+        article = query.filter(Article.id == int(identifier)).first()
+    else:
+        article = query.filter(Article.slug == identifier).first()
+    if article is None or not _article_scope_matches(article, ("imcro_only", "both", "dom_uchitelya_only")):
+        raise HTTPException(status_code=404, detail="Материал не найден")
+    return article
+
+
 @router.get("/api/dom-uchitelya/news/", response_model=ArticleListResponse)
 def get_domu_news(
     limit: int = Query(20, ge=1, le=100),

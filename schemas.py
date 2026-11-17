@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, EmailStr, Field, TypeAdapter, field_validator, model_validator
 from datetime import datetime
 from typing import Any, Optional, List, Dict
+from urllib.parse import urlparse
 
 
 # ====================== Аутентификация ======================
@@ -76,6 +77,7 @@ class RolePermissionsUpdate(BaseModel):
             "tpmpk",
             "audit_log",
             "portal_settings",
+            "practice_expert",
         }
         allowed_levels = {"none", "view", "edit"}
         invalid_modules = set(value) - allowed_modules
@@ -350,6 +352,63 @@ class ArticleListResponse(BaseModel):
 
 PRACTICE_STATUSES = {"pending", "draft", "published", "archive"}
 PRACTICE_LEVELS = {"Начальный", "Продвинутый", "Высший"}
+PRACTICE_UNASSIGNED_LEVEL = "Не присвоен"
+PRACTICE_IMPLEMENTATION_LEVELS = {"Институциональный", "Муниципальный", "Региональный", "Федеральный"}
+PRACTICE_TYPES = {"Педагогическая практика", "Методическая практика", "Управленческая практика"}
+PRACTICE_EDUCATION_LEVELS = {
+    "Начальное общее образование",
+    "Основное общее образование",
+    "Среднее общее образование",
+}
+PRACTICE_AUDIENCE_GROUPS = {
+    "Обучающиеся",
+    "Родители",
+    "Учителя-предметники",
+    "Классные руководители",
+    "Методисты",
+    "Наставники",
+    "Педагоги дополнительного образования",
+    "Педагоги-психологи",
+    "Учителя-логопеды",
+    "Учителя-дефектологи",
+    "Воспитатели ДОУ",
+    "Заведующие ДОУ",
+    "Заместители заведующего ДОУ",
+    "Директора образовательных организаций",
+    "Заместители директора по УВР",
+    "Заместители директора по ВР",
+    "Заместители директора по НМР",
+}
+PRACTICE_CHANGE_SCOPES = {
+    "Уровень образовательной организации",
+    "Уровень класса или группы",
+    "Уровень муниципалитета",
+    "Уровень региона",
+}
+PRACTICE_SUPPORT_OPTIONS = {
+    "Предоставить информационные материалы",
+    "Предоставить методические материалы",
+    "Провести вебинар, семинар или мастер-класс",
+    "Сопровождать реализацию проекта",
+}
+PRACTICE_TOPICS = {
+    "Практики развития системы оценки качества образования",
+    "Практики развития финансовой грамотности",
+    "Современные образовательные технологии и методики",
+    "Практики инклюзивного образования и работа с детьми с ОВЗ",
+    "Практики воспитания",
+    "Практики работы специалистов с детьми с ОВЗ",
+    "Практики взаимодействия общего и дополнительного образования",
+    "Сетевое взаимодействие общего, дополнительного и профессионального образования",
+    "Практики выявления и индивидуального сопровождения высокомотивированных школьников",
+    "Практики наставничества",
+    "Практики по самоопределению и профессиональной ориентации обучающихся",
+    "Практики здоровьесбережения",
+    "Практики развития дошкольного образования",
+    "Практики профилактики деструктивного поведения обучающихся",
+    "Практики профессионального развития педагогических работников и управленческих кадров",
+    "Развитие цифровой образовательной среды",
+}
 
 
 class PracticeBase(BaseModel):
@@ -358,9 +417,14 @@ class PracticeBase(BaseModel):
     summary: str = Field("", max_length=1200)
     description: str = ""
     topic: str = Field(..., min_length=1, max_length=200)
-    level: str = Field("Начальный", max_length=40)
+    level: str = Field(PRACTICE_UNASSIGNED_LEVEL, max_length=40)
+    practice_type: Optional[str] = Field(None, max_length=40)
+    implementation_level: Optional[str] = Field(None, max_length=40)
+    application_data: Dict[str, Any] = Field(default_factory=dict)
     organization: str = Field(..., min_length=1, max_length=300)
     municipality: Optional[str] = Field(None, max_length=200)
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
     author_name: str = Field(..., min_length=1, max_length=200)
     author_email: Optional[EmailStr] = None
     target_audience: Optional[str] = Field(None, max_length=500)
@@ -372,13 +436,123 @@ class PracticeBase(BaseModel):
     @field_validator("level")
     @classmethod
     def _validate_level(cls, value: str) -> str:
-        if value not in PRACTICE_LEVELS:
-            raise ValueError("level must be Начальный, Продвинутый, or Высший")
+        if value not in PRACTICE_LEVELS | {PRACTICE_UNASSIGNED_LEVEL}:
+            raise ValueError("Недопустимый уровень становления практики")
         return value
+
+    @field_validator("practice_type")
+    @classmethod
+    def _validate_practice_type(cls, value: str | None) -> str | None:
+        if value is not None and value not in PRACTICE_TYPES:
+            raise ValueError("Недопустимый тип практики")
+        return value
+
+    @field_validator("implementation_level")
+    @classmethod
+    def _validate_implementation_level(cls, value: str | None) -> str | None:
+        if value is not None and value not in PRACTICE_IMPLEMENTATION_LEVELS:
+            raise ValueError("Недопустимый территориальный уровень реализации практики")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_coordinates(self):
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("latitude and longitude must be provided together")
+        return self
 
 
 class PracticeSubmissionCreate(PracticeBase):
-    pass
+    @model_validator(mode="after")
+    def _validate_application(self):
+        is_expanded_application = bool(
+            self.practice_type
+            or self.implementation_level
+            or self.application_data
+        )
+        if not is_expanded_application:
+            return self
+
+        if self.topic not in PRACTICE_TOPICS:
+            raise ValueError("Выберите направление из списка")
+        if self.practice_type not in PRACTICE_TYPES:
+            raise ValueError("Выберите тип практики")
+        if self.implementation_level not in PRACTICE_IMPLEMENTATION_LEVELS:
+            raise ValueError("Выберите уровень реализации практики")
+        if not self.municipality or not self.municipality.strip():
+            raise ValueError("Укажите территорию реализации практики")
+
+        required_text = {
+            "short_organization": "краткое название организации",
+            "postal_code": "почтовый индекс",
+            "street": "улицу",
+            "house_number": "номер дома",
+            "organization_url": "ссылку на материалы на сайте организации",
+            "curator_name": "Ф.И.О. ответственного лица",
+            "curator_position": "должность ответственного лица",
+            "curator_work_phone": "рабочий телефон ответственного лица",
+            "curator_email": "электронную почту ответственного лица",
+            "implementers": "реализаторов практики",
+            "keywords": "ключевые слова",
+            "relevance": "актуальность практики",
+            "problems": "проблему, цель и задачи практики",
+            "goal": "цель практики",
+            "tasks": "задачи практики",
+            "core_idea": "основную идею практики",
+            "implementation_methods": "средства и методы реализации",
+            "quantitative_results": "количественные результаты",
+            "qualitative_results": "качественные результаты",
+            "result_measurement": "способы измерения результатов",
+            "difficulties": "трудности реализации",
+            "recommendations": "рекомендации для коллег",
+        }
+        missing = [label for key, label in required_text.items() if not str(self.application_data.get(key) or "").strip()]
+        required_lists = {
+            "education_levels": "уровень образования",
+            "audience_groups": "группу участников",
+            "change_scopes": "масштаб изменений",
+        }
+        missing.extend(
+            label
+            for key, label in required_lists.items()
+            if not isinstance(self.application_data.get(key), list) or not self.application_data[key]
+        )
+        if missing:
+            raise ValueError("Заполните обязательные поля: " + ", ".join(missing))
+
+        organization_url = urlparse(str(self.application_data.get("organization_url") or "").strip())
+        if organization_url.scheme not in {"http", "https"} or not organization_url.netloc:
+            raise ValueError("Укажите полную ссылку на материалы организации, начиная с http:// или https://")
+
+        allowed_lists = {
+            "education_levels": PRACTICE_EDUCATION_LEVELS,
+            "audience_groups": PRACTICE_AUDIENCE_GROUPS,
+            "change_scopes": PRACTICE_CHANGE_SCOPES,
+            "support_options": PRACTICE_SUPPORT_OPTIONS,
+        }
+        invalid = []
+        for key, allowed in allowed_lists.items():
+            values = self.application_data.get(key, [])
+            if not isinstance(values, list):
+                if key != "support_options" or values is not None:
+                    invalid.append(key)
+                continue
+            if any(not isinstance(item, str) or item not in allowed for item in values):
+                invalid.append(key)
+        if invalid:
+            raise ValueError("Содержатся недопустимые варианты в полях: " + ", ".join(invalid))
+
+        for key in ("is_repeat_application", "low_performance_school", "has_tochka_rosta"):
+            value = self.application_data.get(key)
+            if value is not None and not isinstance(value, bool):
+                raise ValueError("Некорректный ответ в дополнительной информации")
+
+        email_adapter = TypeAdapter(EmailStr)
+        try:
+            for address in str(self.application_data.get("curator_email") or "").split(";"):
+                email_adapter.validate_python(address.strip())
+        except ValueError as exc:
+            raise ValueError("Проверьте адреса электронной почты ответственного лица") from exc
+        return self
 
 
 class PracticeAdminCreate(PracticeBase):
@@ -399,8 +573,13 @@ class PracticeAdminUpdate(BaseModel):
     description: Optional[str] = None
     topic: Optional[str] = Field(None, min_length=1, max_length=200)
     level: Optional[str] = Field(None, max_length=40)
+    practice_type: Optional[str] = Field(None, max_length=40)
+    implementation_level: Optional[str] = Field(None, max_length=40)
+    application_data: Optional[Dict[str, Any]] = None
     organization: Optional[str] = Field(None, min_length=1, max_length=300)
     municipality: Optional[str] = Field(None, max_length=200)
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
     author_name: Optional[str] = Field(None, min_length=1, max_length=200)
     author_email: Optional[EmailStr] = None
     target_audience: Optional[str] = Field(None, max_length=500)
@@ -413,8 +592,22 @@ class PracticeAdminUpdate(BaseModel):
     @field_validator("level")
     @classmethod
     def _validate_level(cls, value: str | None) -> str | None:
-        if value is not None and value not in PRACTICE_LEVELS:
-            raise ValueError("level must be Начальный, Продвинутый, or Высший")
+        if value is not None and value not in PRACTICE_LEVELS | {PRACTICE_UNASSIGNED_LEVEL}:
+            raise ValueError("Недопустимый уровень становления практики")
+        return value
+
+    @field_validator("practice_type")
+    @classmethod
+    def _validate_practice_type(cls, value: str | None) -> str | None:
+        if value is not None and value not in PRACTICE_TYPES:
+            raise ValueError("Недопустимый тип практики")
+        return value
+
+    @field_validator("implementation_level")
+    @classmethod
+    def _validate_implementation_level(cls, value: str | None) -> str | None:
+        if value is not None and value not in PRACTICE_IMPLEMENTATION_LEVELS:
+            raise ValueError("Недопустимый территориальный уровень реализации практики")
         return value
 
     @field_validator("status")
@@ -438,6 +631,65 @@ class PracticeResponse(PracticeBase):
 
 class PracticeListResponse(BaseModel):
     items: List[PracticeResponse]
+    total: int
+
+
+class PracticeStatisticsTopic(BaseModel):
+    topic: str
+    total: int
+    levels: Dict[str, int]
+
+
+class PracticeStatisticsResponse(BaseModel):
+    total: int
+    by_level: Dict[str, int]
+    by_topic: List[PracticeStatisticsTopic]
+
+
+class PracticeMapItem(BaseModel):
+    id: int
+    slug: str
+    title: str
+    topic: str
+    level: str
+    organization: str
+    municipality: Optional[str] = None
+    latitude: float
+    longitude: float
+
+    model_config = {"from_attributes": True}
+
+
+class PracticeMapResponse(BaseModel):
+    items: List[PracticeMapItem]
+    total: int
+    unlocated_total: int
+
+
+class PracticeConclusionCreate(BaseModel):
+    content: str = Field(..., min_length=10, max_length=10000)
+
+    @field_validator("content")
+    @classmethod
+    def _validate_content(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 10:
+            raise ValueError("Заключение должно содержать не менее 10 символов")
+        return normalized
+
+
+class PracticeConclusionResponse(BaseModel):
+    id: int
+    practice_id: int
+    expert_name: str
+    content: str
+    created_at: datetime
+    updated_at: datetime
+    is_mine: bool = False
+
+
+class PracticeConclusionListResponse(BaseModel):
+    items: List[PracticeConclusionResponse]
     total: int
 
 
