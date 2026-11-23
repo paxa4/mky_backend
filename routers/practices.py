@@ -68,7 +68,33 @@ def get_public_practice_map(db: Session = Depends(get_db)):
         .all()
     )
     unlocated_total = query.filter(or_(Practice.latitude.is_(None), Practice.longitude.is_(None))).count()
-    return {"items": located, "total": len(located), "unlocated_total": unlocated_total}
+    items = []
+    for practice in located:
+        application_data = practice.application_data or {}
+        address = ", ".join(
+            part
+            for part in (
+                application_data.get("postal_code"),
+                application_data.get("street"),
+                f"д. {application_data['house_number']}" if application_data.get("house_number") else None,
+                f"корп. {application_data['building']}" if application_data.get("building") else None,
+            )
+            if part
+        )
+        items.append({
+            "id": practice.id,
+            "slug": practice.slug,
+            "title": practice.title,
+            "summary": practice.summary,
+            "topic": practice.topic,
+            "level": practice.level,
+            "organization": practice.organization,
+            "municipality": practice.municipality,
+            "address": address or None,
+            "latitude": practice.latitude,
+            "longitude": practice.longitude,
+        })
+    return {"items": items, "total": len(located), "unlocated_total": unlocated_total}
 
 
 def _slugify(value: str) -> str:

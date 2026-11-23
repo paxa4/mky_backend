@@ -18,6 +18,7 @@ MODULE_KEYS = frozenset({
     "audit_log",
     "portal_settings",
     "practice_expert",
+    "contact_info",
 })
 
 DEFAULT_ROLE_PERMISSIONS = {
@@ -30,6 +31,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "audit_log": "view",
         "portal_settings": "edit",
         "practice_expert": "none",
+        "contact_info": "edit",
     },
     "methodist": {
         "articles": "edit",
@@ -40,6 +42,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "audit_log": "view",
         "portal_settings": "none",
         "practice_expert": "none",
+        "contact_info": "none",
     },
     "metodist_editor": {
         "articles": "edit",
@@ -50,6 +53,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "audit_log": "view",
         "portal_settings": "none",
         "practice_expert": "none",
+        "contact_info": "none",
     },
     "operator": {
         "articles": "none",
@@ -60,6 +64,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "audit_log": "view",
         "portal_settings": "none",
         "practice_expert": "none",
+        "contact_info": "none",
     },
     "tpmpk_admin": {
         "articles": "none",
@@ -70,6 +75,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "audit_log": "view",
         "portal_settings": "none",
         "practice_expert": "none",
+        "contact_info": "none",
     },
     "tpmpk_operator": {
         "articles": "none",
@@ -80,6 +86,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "audit_log": "view",
         "portal_settings": "none",
         "practice_expert": "none",
+        "contact_info": "none",
     },
     "domu_editor": {
         "articles": "edit",
@@ -90,6 +97,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "audit_log": "view",
         "portal_settings": "none",
         "practice_expert": "none",
+        "contact_info": "none",
     },
     "user": {
         "articles": "none",
@@ -100,6 +108,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "audit_log": "none",
         "portal_settings": "none",
         "practice_expert": "none",
+        "contact_info": "none",
     },
     "practice_expert": {
         "articles": "none",
@@ -110,6 +119,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "audit_log": "none",
         "portal_settings": "none",
         "practice_expert": "edit",
+        "contact_info": "none",
     },
 }
 

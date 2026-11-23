@@ -78,6 +78,7 @@ class RolePermissionsUpdate(BaseModel):
             "audit_log",
             "portal_settings",
             "practice_expert",
+            "contact_info",
         }
         allowed_levels = {"none", "view", "edit"}
         invalid_modules = set(value) - allowed_modules
@@ -116,6 +117,57 @@ class PortalSettingsUpdate(BaseModel):
 
 
 class PortalSettingsResponse(PortalSettingsUpdate):
+    id: int
+    updated_by_id: Optional[int] = None
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class SiteContactItem(BaseModel):
+    label: str = Field(..., min_length=1, max_length=100)
+    value: str = Field("", max_length=1000)
+    href: Optional[str] = Field(None, max_length=1000)
+    group: Optional[str] = Field(None, max_length=200)
+    card: Optional[str] = Field(None, max_length=200)
+    key: Optional[str] = Field(None, max_length=200)
+
+    @field_validator("label", "value", "href", "group", "card", "key")
+    @classmethod
+    def _trim_contact_values(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("label")
+    @classmethod
+    def _require_contact_label(cls, value: str) -> str:
+        if not value:
+            raise ValueError("Укажите подпись контактного поля")
+        return value
+
+    @field_validator("href")
+    @classmethod
+    def _validate_contact_href(cls, value: Optional[str]) -> Optional[str]:
+        if value and not value.startswith(("tel:", "mailto:", "https://", "http://", "/")):
+            raise ValueError("Ссылка должна начинаться с tel:, mailto:, http://, https:// или /")
+        return value
+
+
+class SiteContactInfoUpdate(BaseModel):
+    path: str = Field(..., min_length=1, max_length=300)
+    title: str = Field("Контактная информация", min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=1000)
+    contacts: List[SiteContactItem] = Field(default_factory=list, max_length=200)
+
+    @field_validator("path")
+    @classmethod
+    def _normalize_contact_path(cls, value: str) -> str:
+        path = value.strip()
+        if not path.startswith("/") or "?" in path or "#" in path or ".." in path:
+            raise ValueError("Укажите корректный путь страницы")
+        return "/" if path == "/" else path.rstrip("/") + "/"
+
+
+class SiteContactInfoResponse(SiteContactInfoUpdate):
     id: int
     updated_by_id: Optional[int] = None
     updated_at: datetime
@@ -650,10 +702,12 @@ class PracticeMapItem(BaseModel):
     id: int
     slug: str
     title: str
+    summary: Optional[str] = None
     topic: str
     level: str
     organization: str
     municipality: Optional[str] = None
+    address: Optional[str] = None
     latitude: float
     longitude: float
 

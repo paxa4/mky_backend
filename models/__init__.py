@@ -101,6 +101,21 @@ class PortalSettings(Base):
     updated_by = relationship("User", foreign_keys=[updated_by_id])
 
 
+class SiteContactInfo(Base):
+    __tablename__ = "site_contact_info"
+    __table_args__ = (UniqueConstraint("path", name="site_contact_info_path_unique"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    path = Column(String(300), nullable=False, index=True)
+    title = Column(String(200), nullable=False, default="Контактная информация")
+    description = Column(String(1000), nullable=True)
+    contacts = Column(JSON, nullable=False, default=list)
+    updated_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    updated_by = relationship("User", foreign_keys=[updated_by_id])
+
+
 class AssistantChatSession(Base):
     __tablename__ = "assistant_chat_session"
     __table_args__ = (
@@ -455,6 +470,7 @@ __all__ = [
     "CertificateTemplate",
     "GeneratedCertificate",
     "PortalSettings",
+    "SiteContactInfo",
     "Practice",
     "PracticeConclusion",
     "Tag",
